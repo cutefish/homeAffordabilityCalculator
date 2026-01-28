@@ -12,6 +12,7 @@ from config import (
     FilingStatus,
     IncomeSchedule,
     RSUGrant,
+    RSUTerm,
     StockPriceProjection,
     Investment,
     InvestmentType,
@@ -378,7 +379,7 @@ def analyze_rsu_timing():
         today = date.today()
         term = grant.get_term(today)
 
-        if term == config.RSUTerm.LONG_TERM:
+        if term == RSUTerm.LONG_TERM:
             print(f"  Status: LONG-TERM eligible (held > 1 year)")
         else:
             lt_date = date(
