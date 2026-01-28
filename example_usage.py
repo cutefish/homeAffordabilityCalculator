@@ -403,6 +403,98 @@ def analyze_rsu_timing():
                   f"Net=${result.net_proceeds:>10,.0f}")
 
 
+def run_multi_year_projection():
+    """Run multi-year cash flow and net worth projection."""
+    print("\n" + "="*70)
+    print("MULTI-YEAR CASH FLOW PROJECTION")
+    print("="*70)
+
+    from multi_year_projection import (
+        MultiYearProjector,
+        print_projection_summary,
+        print_monthly_detail
+    )
+
+    config = create_sample_config()
+
+    # Define property for this scenario
+    property_inputs = PropertyInputs(
+        home_price=1000000,
+        mortgage_rate=0.07,
+        loan_term_years=30,
+        down_payment_percent=0.20,
+        property_tax_rate=0.0125,
+        hoa_monthly=400,
+        homeowners_insurance_annual=2000,
+        pmi_rate=0.005
+    )
+
+    # Calculate upfront costs (simplified - in real usage, get from simulator)
+    down_payment = property_inputs.down_payment
+    closing_costs_estimate = property_inputs.loan_amount * 0.03
+    upfront_costs = down_payment + closing_costs_estimate
+
+    # Initial liquid savings (before purchase)
+    initial_savings = (
+        config.cash_savings +
+        sum(inv.current_value for inv in config.investments) +
+        sum(grant.quantity * config.stock_current_price for grant in config.rsu_grants)
+    )
+
+    # Create projector
+    projector = MultiYearProjector(
+        config=config,
+        property_inputs=property_inputs,
+        initial_liquid_savings=initial_savings,
+        upfront_costs_paid=upfront_costs
+    )
+
+    # Run 10-year projection
+    projection = projector.project(
+        years=10,
+        start_year=2025,
+        monthly_living_expenses=4000,
+        annual_home_appreciation=0.03,
+        annual_rent_increase=0.04,
+        comparable_monthly_rent=4000,  # What you'd pay to rent similar place
+        investment_return_rate=0.07,
+        include_maintenance=True
+    )
+
+    # Print summary
+    print_projection_summary(projection)
+
+    # Print detailed monthly breakdown for first year
+    print_monthly_detail(projection, 2025)
+
+    # Show key insights
+    print("\n" + "="*70)
+    print("KEY INSIGHTS")
+    print("="*70)
+
+    first_year = projection.yearly_snapshots[0]
+    print(f"\nFirst Year ({first_year.year}):")
+    print(f"  Monthly housing cost: ${first_year.total_housing_cost / 12:,.0f}")
+    print(f"  Monthly net cash flow: ${first_year.average_monthly_cash_flow:,.0f}")
+    print(f"  Housing-to-income ratio: {first_year.total_housing_cost / first_year.total_gross_income * 100:.1f}%")
+
+    if projection.breakeven.breakeven_month:
+        years = projection.breakeven.breakeven_month // 12
+        months = projection.breakeven.breakeven_month % 12
+        print(f"\nYou need to stay at least {years} years {months} months to beat renting.")
+    else:
+        print(f"\nBuying doesn't beat renting within {projection.projection_years} years in this scenario.")
+
+    # Find when selling makes sense
+    print("\nWhen does selling make financial sense?")
+    for scenario in projection.breakeven.selling_scenarios:
+        if scenario['vs_renting'] > 0:
+            print(f"  After year {scenario['years_owned']}: You'd be ${scenario['vs_renting']:,.0f} ahead of renting")
+            break
+    else:
+        print("  Selling doesn't beat renting in any year of the projection")
+
+
 if __name__ == "__main__":
     print("="*70)
     print("HOME AFFORDABILITY CALCULATOR - DEMONSTRATION")
@@ -413,6 +505,7 @@ if __name__ == "__main__":
     run_multi_scenario_comparison()
     run_rent_vs_buy_analysis()
     analyze_rsu_timing()
+    run_multi_year_projection()  # NEW: Multi-year analysis
 
     print("\n" + "="*70)
     print("ANALYSIS COMPLETE")
