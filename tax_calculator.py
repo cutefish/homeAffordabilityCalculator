@@ -11,9 +11,7 @@ Handles:
 """
 
 from dataclasses import dataclass
-from typing import Optional
-from config import FilingStatus, RSUTerm
-from datetime import date
+from config import FilingStatus
 
 
 # 2024 Federal Income Tax Brackets

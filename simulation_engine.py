@@ -15,14 +15,14 @@ The simulation integrates:
 """
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date
 from dateutil.relativedelta import relativedelta
 from enum import Enum
-from typing import Optional, Callable
+from typing import Optional
 from copy import deepcopy
 
-from config import FilingStatus, InvestmentType
-from tax_calculator import TaxCalculator, RSUTerm
+from config import FilingStatus, InvestmentType, RSUTerm
+from tax_calculator import TaxCalculator
 
 
 # =============================================================================
