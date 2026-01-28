@@ -12,7 +12,7 @@ Handles:
 
 from dataclasses import dataclass
 from typing import Optional
-from config import FilingStatus, RSUGrant, RSUTerm
+from config import FilingStatus, RSUTerm
 from datetime import date
 
 
@@ -232,23 +232,6 @@ class TaxBreakdown:
         return self.total_federal + self.total_state
 
 
-@dataclass
-class RSUSaleResult:
-    """Result of an RSU sale calculation."""
-    grant_id: str
-    shares_sold: int
-    sale_price_per_share: float
-    cost_basis_per_share: float
-    gross_proceeds: float
-    cost_basis_total: float
-    capital_gain: float
-    term: RSUTerm
-    federal_tax: float
-    state_tax: float
-    niit: float
-    net_proceeds: float
-
-
 class TaxCalculator:
     """Calculator for federal and state taxes."""
 
@@ -423,86 +406,6 @@ class TaxCalculator:
             medicare += (wages - threshold) * MEDICARE_ADDITIONAL_RATE
 
         return social_security, medicare
-
-    def calculate_rsu_sale_tax(
-        self,
-        grant: RSUGrant,
-        sale_date: date,
-        sale_price_per_share: float,
-        ordinary_income: float,
-        shares_to_sell: Optional[int] = None
-    ) -> RSUSaleResult:
-        """
-        Calculate taxes on RSU sale.
-
-        Args:
-            grant: The RSU grant being sold
-            sale_date: Date of sale
-            sale_price_per_share: Sale price per share
-            ordinary_income: Other ordinary income for the year
-            shares_to_sell: Number of shares to sell (default: all)
-
-        Returns:
-            RSUSaleResult with detailed breakdown
-        """
-        shares = shares_to_sell if shares_to_sell is not None else grant.quantity
-
-        # Calculate gain
-        gross_proceeds = shares * sale_price_per_share
-        cost_basis_total = shares * grant.cost_basis_per_share
-        capital_gain = gross_proceeds - cost_basis_total
-
-        # Determine term
-        term = grant.get_term(sale_date)
-
-        # Calculate federal tax on the gain
-        if term == RSUTerm.SHORT_TERM:
-            stcg_tax, ltcg_tax = self.calculate_federal_capital_gains_tax(
-                ordinary_income=ordinary_income,
-                short_term_gains=max(0, capital_gain),
-                long_term_gains=0
-            )
-            federal_tax = stcg_tax
-        else:
-            stcg_tax, ltcg_tax = self.calculate_federal_capital_gains_tax(
-                ordinary_income=ordinary_income,
-                short_term_gains=0,
-                long_term_gains=max(0, capital_gain)
-            )
-            federal_tax = ltcg_tax
-
-        # Calculate NIIT
-        niit = self.calculate_niit(
-            ordinary_income=ordinary_income,
-            investment_income=max(0, capital_gain)
-        )
-
-        # California taxes capital gains as ordinary income
-        # Calculate marginal state tax on the gain
-        base_state_tax = self.calculate_california_income_tax(ordinary_income)
-        state_tax_with_gain = self.calculate_california_income_tax(
-            ordinary_income + max(0, capital_gain)
-        )
-        state_tax = state_tax_with_gain - base_state_tax
-
-        # Net proceeds
-        total_tax = federal_tax + niit + state_tax
-        net_proceeds = gross_proceeds - total_tax
-
-        return RSUSaleResult(
-            grant_id=grant.grant_id,
-            shares_sold=shares,
-            sale_price_per_share=sale_price_per_share,
-            cost_basis_per_share=grant.cost_basis_per_share,
-            gross_proceeds=gross_proceeds,
-            cost_basis_total=cost_basis_total,
-            capital_gain=capital_gain,
-            term=term,
-            federal_tax=federal_tax,
-            state_tax=state_tax,
-            niit=niit,
-            net_proceeds=net_proceeds
-        )
 
     def calculate_full_tax_breakdown(
         self,
