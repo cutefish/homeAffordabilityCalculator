@@ -317,18 +317,21 @@ class MonthlySnapshot:
 
     @property
     def total_housing_cost(self) -> float:
+        """True housing cost (excludes principal which builds equity)."""
         if self.rent > 0:
             return self.rent
         return (
-            self.mortgage_principal + self.mortgage_interest +
+            self.mortgage_interest +
             self.property_tax + self.homeowners_insurance +
             self.pmi + self.hoa + self.maintenance
         )
 
     @property
     def total_expenses(self) -> float:
+        """Total cash outflows (includes principal since it reduces cash)."""
         return (
             self.total_housing_cost +
+            self.mortgage_principal +  # Principal is cash outflow even though it builds equity
             self.other_debt_payments +
             self.income_tax_withheld +
             self.living_expenses +
@@ -451,8 +454,6 @@ class FinancialSimulator:
 
         # Track for tax calculations
         self._ytd_income = 0.0
-        self._ytd_short_term_gains = 0.0
-        self._ytd_long_term_gains = 0.0
 
     def run(self) -> SimulationResult:
         """Run the complete simulation."""
@@ -463,6 +464,7 @@ class FinancialSimulator:
         rent_cash = self.inputs.initial_cash
         rent_investments = deepcopy(self.inputs.investments)
         rent_rsu_holdings = deepcopy(self.inputs.rsu_holdings)
+        rent_ytd_income = 0.0
 
         start_date = self.inputs.start_date
         end_date = start_date + relativedelta(years=self.inputs.simulation_years)
@@ -488,8 +490,7 @@ class FinancialSimulator:
             # Reset YTD trackers at start of year
             if month == 1:
                 self._ytd_income = 0.0
-                self._ytd_short_term_gains = 0.0
-                self._ytd_long_term_gains = 0.0
+                rent_ytd_income = 0.0
 
             # Get income for this year
             income_profile = self.inputs.get_income_for_year(year)
@@ -512,18 +513,15 @@ class FinancialSimulator:
             sale_proceeds, sale_gains, sale_taxes = self._process_rsu_sales(current_date)
             total_rsu_taxes += sale_taxes
 
-            if sale_gains >= 0:
-                # Determine if gains are short or long term based on what was sold
-                # Simplified: add to appropriate bucket
-                self._ytd_short_term_gains += sale_gains * 0.3  # Rough estimate
-                self._ytd_long_term_gains += sale_gains * 0.7
+            # Track liquidation taxes for this month
+            liquidation_taxes = 0.0
 
             # Process home purchase if this is the month
             if (self.inputs.house_plan and
                 self.inputs.house_plan.purchase_date.year == year and
                 self.inputs.house_plan.purchase_date.month == month and
                 self._home is None):
-                self._execute_home_purchase()
+                liquidation_taxes = self._execute_home_purchase()
                 home_purchase_month = month_index
 
             # Calculate housing costs
@@ -557,11 +555,15 @@ class FinancialSimulator:
             tax_rate = self._estimate_tax_rate(income_profile.total_annual)
             income_tax = gross_income * tax_rate
 
+            # RSU vest withholding (typically ~37% in CA: 22% federal + 10.23% state + FICA)
+            rsu_vest_withholding = vest_income * 0.37 if vest_income > 0 else 0
+
             # Apply all cash flows
             self._cash += gross_income + sale_proceeds
             self._cash -= sum(housing_costs.values())
             self._cash -= other_debt_payments
             self._cash -= income_tax
+            self._cash -= rsu_vest_withholding
             self._cash -= self.inputs.monthly_living_expenses
             self._cash -= sale_taxes
 
@@ -591,17 +593,17 @@ class FinancialSimulator:
                 maintenance=housing_costs.get('maintenance', 0),
                 rent=housing_costs.get('rent', 0),
                 other_debt_payments=other_debt_payments,
-                income_tax_withheld=income_tax,
+                income_tax_withheld=income_tax + rsu_vest_withholding,
                 living_expenses=self.inputs.monthly_living_expenses,
-                capital_gains_tax_paid=sale_taxes
+                capital_gains_tax_paid=sale_taxes + liquidation_taxes
             )
             monthly_snapshots.append(snapshot)
 
             # === RENT SCENARIO (parallel simulation) ===
-            rent_snapshot = self._simulate_rent_month(
+            rent_snapshot, rent_ytd_income = self._simulate_rent_month(
                 current_date, year, month, income_profile,
                 rent_cash, rent_investments, rent_rsu_holdings,
-                current_rent, stock_price
+                current_rent, stock_price, rent_ytd_income
             )
             rent_scenario_snapshots.append(rent_snapshot)
 
@@ -699,7 +701,7 @@ class FinancialSimulator:
                 should_sell = False
 
                 if rule.strategy == RSUSellStrategy.SELL_IMMEDIATELY:
-                    # Sell in the month after vesting
+                    # Sell in the same month as vesting
                     if (lot.vest_date.year == current_date.year and
                         lot.vest_date.month == current_date.month):
                         should_sell = True
@@ -784,12 +786,12 @@ class FinancialSimulator:
         with_gain = self.tax_calc.calculate_california_income_tax(ytd_income + gain)
         return with_gain - base
 
-    def _execute_home_purchase(self):
-        """Execute home purchase, updating state."""
+    def _execute_home_purchase(self) -> float:
+        """Execute home purchase, updating state. Returns capital gains taxes paid."""
         plan = self.inputs.house_plan
 
-        # Calculate closing costs (simplified ~3% of loan)
-        closing_costs = plan.loan_amount * 0.03
+        # Calculate closing costs (typically 2-5% of home price)
+        closing_costs = plan.home_price * 0.03
 
         # Total cash needed
         total_upfront = plan.down_payment + closing_costs
@@ -799,14 +801,39 @@ class FinancialSimulator:
         self._cash -= cash_used
         remaining = total_upfront - cash_used
 
-        # If not enough cash, liquidate investments
+        # Track capital gains taxes from liquidation
+        liquidation_taxes = 0.0
+
+        # If not enough cash, liquidate investments (lowest gains first to minimize taxes)
         if remaining > 0:
             for inv in sorted(self._investments, key=lambda x: x.unrealized_gain):
                 if remaining <= 0:
                     break
+
                 liquidate = min(inv.balance, remaining)
+
+                # Calculate proportional gains and taxes
+                if inv.balance > 0 and liquidate > 0:
+                    proportion = liquidate / inv.balance
+                    gain = inv.unrealized_gain * proportion
+
+                    if gain > 0:
+                        # Calculate capital gains tax (assume long-term for investments)
+                        _, ltcg_tax = self.tax_calc.calculate_federal_capital_gains_tax(
+                            self._ytd_income, 0, gain
+                        )
+                        niit = self.tax_calc.calculate_niit(self._ytd_income, gain)
+                        state_tax = self._calculate_marginal_ca_tax(gain, self._ytd_income)
+                        liquidation_taxes += ltcg_tax + niit + state_tax
+
+                    # Update cost basis proportionally
+                    inv.cost_basis -= inv.cost_basis * proportion
+
                 inv.balance -= liquidate
                 remaining -= liquidate
+
+        # Deduct liquidation taxes from cash
+        self._cash -= liquidation_taxes
 
         # Create mortgage
         monthly_payment = self._calculate_monthly_pi(
@@ -832,6 +859,8 @@ class FinancialSimulator:
             insurance_annual=plan.homeowners_insurance_annual,
             maintenance_rate=plan.maintenance_rate
         )
+
+        return liquidation_taxes
 
     def _calculate_monthly_pi(
         self,
@@ -870,7 +899,7 @@ class FinancialSimulator:
         }
 
         if home.requires_pmi:
-            costs['pmi'] = home.mortgage.remaining_balance * 0.005 / 12
+            costs['pmi'] = home.mortgage.remaining_balance * home.pmi_rate / 12
 
         return costs
 
@@ -899,28 +928,91 @@ class FinancialSimulator:
         investments: list[InvestmentAccount],
         rsu_holdings: list[RSULot],
         rent: float,
-        stock_price: float
-    ) -> MonthlySnapshot:
-        """Simulate a month in the renting scenario."""
+        stock_price: float,
+        ytd_income: float
+    ) -> tuple[MonthlySnapshot, float]:
+        """Simulate a month in the renting scenario. Returns snapshot and updated YTD income."""
         monthly_salary = income_profile.monthly_salary
         bonus = income_profile.bonus if month == 12 else 0
         gross_income = monthly_salary + bonus
+        ytd_income += gross_income
 
         # Process RSU vests (same as buying scenario)
         vest_income = 0.0
         for vest in self.inputs.future_rsu_vests:
             if (vest.vest_date.year == year and vest.vest_date.month == month):
                 vest_income += vest.shares * stock_price
+                ytd_income += vest_income
+                # Add vested shares to holdings
+                new_lot = RSULot(
+                    lot_id=vest.vest_id,
+                    shares=vest.shares,
+                    cost_basis_per_share=stock_price,
+                    vest_date=vest.vest_date
+                )
+                rsu_holdings.append(new_lot)
+
+        # Process RSU sales (same strategies as buying, except SELL_AT_PURCHASE)
+        sale_proceeds = 0.0
+        sale_gains = 0.0
+        sale_taxes = 0.0
+
+        for rule in self.inputs.rsu_sell_rules:
+            # Skip SELL_AT_PURCHASE since there's no home purchase
+            if rule.strategy == RSUSellStrategy.SELL_AT_PURCHASE:
+                continue
+
+            lots_to_process = []
+            if rule.lot_id == "all":
+                lots_to_process = [lot for lot in rsu_holdings if lot.shares > 0]
+            else:
+                lots_to_process = [lot for lot in rsu_holdings
+                                   if lot.lot_id == rule.lot_id and lot.shares > 0]
+
+            for lot in lots_to_process:
+                should_sell = False
+
+                if rule.strategy == RSUSellStrategy.SELL_IMMEDIATELY:
+                    if (lot.vest_date.year == year and lot.vest_date.month == month):
+                        should_sell = True
+                elif rule.strategy == RSUSellStrategy.SELL_LONG_TERM:
+                    lt_date = lot.vest_date + relativedelta(years=1)
+                    if (lt_date.year == year and lt_date.month == month):
+                        should_sell = True
+                elif rule.strategy == RSUSellStrategy.CUSTOM and rule.sell_date:
+                    if (rule.sell_date.year == year and rule.sell_date.month == month):
+                        should_sell = True
+
+                if should_sell:
+                    shares_to_sell = rule.shares_to_sell or lot.shares
+                    shares_to_sell = min(shares_to_sell, lot.shares)
+
+                    if shares_to_sell > 0:
+                        proceeds = shares_to_sell * stock_price
+                        cost_basis = shares_to_sell * lot.cost_basis_per_share
+                        gain = proceeds - cost_basis
+
+                        term = lot.get_term(current_date)
+                        tax = self._calculate_rsu_sale_tax(gain, term, ytd_income)
+
+                        sale_proceeds += proceeds
+                        sale_gains += gain
+                        sale_taxes += tax
+                        lot.shares -= shares_to_sell
 
         # Taxes
         tax_rate = self._estimate_tax_rate(income_profile.total_annual)
         income_tax = gross_income * tax_rate
 
+        # RSU vest withholding (same as buy scenario)
+        rsu_vest_withholding = vest_income * 0.37 if vest_income > 0 else 0
+
         # Other expenses
         other_debt = sum(d.monthly_payment for d in self.inputs.debts)
 
         # Apply cash flow
-        net_flow = gross_income - rent - other_debt - income_tax - self.inputs.monthly_living_expenses
+        net_flow = (gross_income + sale_proceeds - rent - other_debt - income_tax -
+                    rsu_vest_withholding - sale_taxes - self.inputs.monthly_living_expenses)
         cash += net_flow
 
         # Grow investments
@@ -931,14 +1023,14 @@ class FinancialSimulator:
         # RSU value
         rsu_value = sum(lot.shares * stock_price for lot in rsu_holdings)
 
-        return MonthlySnapshot(
+        snapshot = MonthlySnapshot(
             date=current_date,
             year=year,
             month=month,
             gross_income=gross_income,
             rsu_vest_income=vest_income,
-            rsu_sale_proceeds=0,
-            rsu_sale_gains=0,
+            rsu_sale_proceeds=sale_proceeds,
+            rsu_sale_gains=sale_gains,
             cash_balance=cash,
             investment_balance=sum(inv.balance for inv in investments),
             rsu_holdings_value=rsu_value,
@@ -952,10 +1044,11 @@ class FinancialSimulator:
             maintenance=0,
             rent=rent,
             other_debt_payments=other_debt,
-            income_tax_withheld=income_tax,
+            income_tax_withheld=income_tax + rsu_vest_withholding,
             living_expenses=self.inputs.monthly_living_expenses,
-            capital_gains_tax_paid=0
+            capital_gains_tax_paid=sale_taxes
         )
+        return snapshot, ytd_income
 
     def _build_yearly_summaries(
         self,
