@@ -523,6 +523,5 @@ def estimate_marginal_tax_rate(
     return {
         "federal": federal_rate,
         "state": state_rate,
-        "combined": federal_rate + state_rate,
-        "effective_federal_after_salt": federal_rate * (1 - min(state_rate, 0.10))
+        "combined": federal_rate + state_rate
     }

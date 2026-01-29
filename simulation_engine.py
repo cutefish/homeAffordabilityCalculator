@@ -110,6 +110,21 @@ class HousePurchasePlan:
     homeowners_insurance_annual: float = 2000.0
     maintenance_rate: float = 0.01  # Annual maintenance as % of home value
 
+    def __post_init__(self):
+        """Validate house purchase plan inputs."""
+        if self.home_price <= 0:
+            raise ValueError("home_price must be positive")
+        if not 0 <= self.down_payment_percent <= 1:
+            raise ValueError("down_payment_percent must be between 0 and 1")
+        if self.mortgage_rate < 0 or self.mortgage_rate > 0.25:
+            raise ValueError("mortgage_rate must be between 0 and 0.25 (25%)")
+        if self.loan_term_years <= 0 or self.loan_term_years > 50:
+            raise ValueError("loan_term_years must be between 1 and 50")
+        if self.property_tax_rate < 0:
+            raise ValueError("property_tax_rate cannot be negative")
+        if self.hoa_monthly < 0:
+            raise ValueError("hoa_monthly cannot be negative")
+
     @property
     def down_payment(self) -> float:
         return self.home_price * self.down_payment_percent
@@ -215,6 +230,21 @@ class SimulationInputs:
 
     # Simulation period
     simulation_years: int = 10
+
+    def __post_init__(self):
+        """Validate simulation inputs."""
+        if self.initial_cash < 0:
+            raise ValueError("initial_cash cannot be negative")
+        if self.comparable_rent < 0:
+            raise ValueError("comparable_rent cannot be negative")
+        if self.monthly_living_expenses < 0:
+            raise ValueError("monthly_living_expenses cannot be negative")
+        if self.simulation_years <= 0 or self.simulation_years > 50:
+            raise ValueError("simulation_years must be between 1 and 50")
+        # Validate income schedules have positive values
+        for income in self.income_schedule:
+            if income.base_salary < 0:
+                raise ValueError(f"base_salary for year {income.year} cannot be negative")
 
     def get_income_for_year(self, year: int) -> Optional[IncomeProfile]:
         """Get income profile for a specific year."""
@@ -464,6 +494,7 @@ class FinancialSimulator:
         rent_cash = self.inputs.initial_cash
         rent_investments = deepcopy(self.inputs.investments)
         rent_rsu_holdings = deepcopy(self.inputs.rsu_holdings)
+        rent_debts = deepcopy(self.inputs.debts)
         rent_ytd_income = 0.0
 
         start_date = self.inputs.start_date
@@ -506,7 +537,7 @@ class FinancialSimulator:
             self._ytd_income += gross_income
 
             # Process RSU vests
-            vest_income, vested_lots = self._process_rsu_vests(current_date)
+            vest_income = self._process_rsu_vests(current_date)
             self._ytd_income += vest_income
 
             # Process RSU sales
@@ -548,8 +579,26 @@ class FinancialSimulator:
             # Apply investment growth
             self._grow_investments()
 
-            # Calculate expenses
-            other_debt_payments = sum(d.monthly_payment for d in self._debts)
+            # Calculate and apply debt payments
+            other_debt_payments = 0.0
+            for debt in self._debts:
+                if debt.remaining_balance > 0:
+                    # Calculate interest portion
+                    monthly_interest = debt.remaining_balance * (debt.interest_rate / 12)
+                    principal_payment = debt.monthly_payment - monthly_interest
+
+                    # Don't pay more than remaining balance
+                    if principal_payment > debt.remaining_balance:
+                        principal_payment = debt.remaining_balance
+                        actual_payment = principal_payment + monthly_interest
+                    else:
+                        actual_payment = debt.monthly_payment
+
+                    debt.remaining_balance -= principal_payment
+                    other_debt_payments += actual_payment
+                elif debt.remaining_balance == 0 and debt.interest_rate == 0:
+                    # Simple recurring payment with no balance tracking (e.g., subscriptions)
+                    other_debt_payments += debt.monthly_payment
 
             # Estimate income tax (simplified monthly withholding)
             tax_rate = self._estimate_tax_rate(income_profile.total_annual)
@@ -602,7 +651,7 @@ class FinancialSimulator:
             # === RENT SCENARIO (parallel simulation) ===
             rent_snapshot, rent_ytd_income = self._simulate_rent_month(
                 current_date, year, month, income_profile,
-                rent_cash, rent_investments, rent_rsu_holdings,
+                rent_cash, rent_investments, rent_rsu_holdings, rent_debts,
                 current_rent, stock_price, rent_ytd_income
             )
             rent_scenario_snapshots.append(rent_snapshot)
@@ -654,11 +703,9 @@ class FinancialSimulator:
             bonus=last.bonus * growth
         )
 
-    def _process_rsu_vests(self, current_date: date) -> tuple[float, list[RSULot]]:
-        """Process RSU vests for this month."""
+    def _process_rsu_vests(self, current_date: date) -> float:
+        """Process RSU vests for this month. Returns vest income."""
         vest_income = 0.0
-        vested_lots = []
-
         stock_price = self.inputs.market.get_stock_price(current_date)
 
         # Check for scheduled vests
@@ -673,12 +720,11 @@ class FinancialSimulator:
                     vest_date=vest.vest_date
                 )
                 self._rsu_holdings.append(new_lot)
-                vested_lots.append(new_lot)
 
                 # Vest value is taxed as ordinary income
                 vest_income += vest.shares * stock_price
 
-        return vest_income, vested_lots
+        return vest_income
 
     def _process_rsu_sales(self, current_date: date) -> tuple[float, float, float]:
         """Process RSU sales based on sell rules."""
@@ -927,6 +973,7 @@ class FinancialSimulator:
         cash: float,
         investments: list[InvestmentAccount],
         rsu_holdings: list[RSULot],
+        debts: list[DebtObligation],
         rent: float,
         stock_price: float,
         ytd_income: float
@@ -1007,8 +1054,21 @@ class FinancialSimulator:
         # RSU vest withholding (same as buy scenario)
         rsu_vest_withholding = vest_income * 0.37 if vest_income > 0 else 0
 
-        # Other expenses
-        other_debt = sum(d.monthly_payment for d in self.inputs.debts)
+        # Calculate and apply debt payments
+        other_debt = 0.0
+        for debt in debts:
+            if debt.remaining_balance > 0:
+                monthly_interest = debt.remaining_balance * (debt.interest_rate / 12)
+                principal_payment = debt.monthly_payment - monthly_interest
+                if principal_payment > debt.remaining_balance:
+                    principal_payment = debt.remaining_balance
+                    actual_payment = principal_payment + monthly_interest
+                else:
+                    actual_payment = debt.monthly_payment
+                debt.remaining_balance -= principal_payment
+                other_debt += actual_payment
+            elif debt.remaining_balance == 0 and debt.interest_rate == 0:
+                other_debt += debt.monthly_payment
 
         # Apply cash flow
         net_flow = (gross_income + sale_proceeds - rent - other_debt - income_tax -
