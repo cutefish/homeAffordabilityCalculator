@@ -1,228 +1,262 @@
 # Code Review: Home Affordability Calculator
 
+## Branch: `claude/house-affordability-calculator-QLGgA`
+
+**Review Date:** 2026-02-04
+
+---
+
 ## Executive Summary
 
-This is a well-structured financial simulation engine for analyzing home affordability decisions. The codebase demonstrates good architecture with clear separation of concerns, proper use of Python dataclasses, and comprehensive financial modeling. However, there are several issues ranging from potential bugs to design improvements that should be addressed.
+This branch contains significant improvements to the home affordability calculator, addressing many issues from the previous review. The changes include bug fixes for RSU handling, debt amortization, tax calculations, and the addition of a comprehensive educational test suite. The code quality has improved substantially.
+
+**Key Changes Reviewed:**
+- `simulation_engine.py`: +195 lines (major fixes and improvements)
+- `tax_calculator.py`: -2 lines (removed incorrect calculation)
+- `test_financial_concepts.py`: +749 lines (new educational test suite)
 
 ---
 
-## 1. Critical Issues
+## 1. Issues Fixed (from Previous Review)
 
-### 1.1 Bug: RSU Vesting Income Not Added to Cash (`simulation_engine.py:561`)
+### 1.1 ✅ Fixed: Arbitrary 30/70 Split for Capital Gains
 
+**Before:**
 ```python
-# Apply all cash flows
-self._cash += gross_income + sale_proceeds
-self._cash -= sum(housing_costs.values())
+self._ytd_short_term_gains += sale_gains * 0.3  # Rough estimate
+self._ytd_long_term_gains += sale_gains * 0.7
 ```
 
-**Problem:** When RSUs vest, their value is recorded as `vest_income` and added to `_ytd_income` for tax purposes, but the actual cash proceeds are never added to `_cash`. RSU vesting typically involves selling shares to cover taxes (sell-to-cover), so there should be cash impact.
+**After:** The problematic `_ytd_short_term_gains` and `_ytd_long_term_gains` variables have been removed entirely. Tax calculations now use the actual gain term from each sale.
 
-**Impact:** The simulation may undercount available cash for home purchase if the user expects to use RSU proceeds.
+### 1.2 ✅ Fixed: Debt Balance Never Decreases
 
-### 1.2 Bug: Arbitrary 30/70 Split for Capital Gains (`simulation_engine.py:517-519`)
+**Before:** Debts were charged monthly but balance never reduced.
 
+**After:** Proper debt amortization implemented:
 ```python
-if sale_gains >= 0:
-    # Determine if gains are short or long term based on what was sold
-    # Simplified: add to appropriate bucket
-    self._ytd_short_term_gains += sale_gains * 0.3  # Rough estimate
-    self._ytd_long_term_gains += sale_gains * 0.7
+for debt in self._debts:
+    if debt.remaining_balance > 0:
+        monthly_interest = debt.remaining_balance * (debt.interest_rate / 12)
+        principal_payment = debt.monthly_payment - monthly_interest
+        if principal_payment > debt.remaining_balance:
+            principal_payment = debt.remaining_balance
+        debt.remaining_balance -= principal_payment
 ```
 
-**Problem:** The code uses a hardcoded 30/70 split for short/long-term gains instead of tracking the actual split from `_process_rsu_sales()`. The function already calculates the term for each lot sold.
+### 1.3 ✅ Fixed: PMI Rate Hardcoded
 
-**Impact:** Inaccurate YTD tracking affects subsequent tax calculations.
+**Before:** Used hardcoded `0.005` instead of `home.pmi_rate`.
 
-### 1.3 Bug: Rent Scenario RSU Holdings Not Updated (`simulation_engine.py:892-958`)
-
-In `_simulate_rent_month()`, the `rsu_holdings` parameter is passed but never mutated to add new vested lots. The rent scenario only calculates vest income but doesn't track the holdings properly for RSU value calculations.
-
----
-
-## 2. Logic Issues
-
-### 2.1 Debt Balance Never Decreases (`simulation_engine.py`)
-
-The `DebtObligation` class has `remaining_balance` but the simulation never reduces it when payments are made. Over a 10-year simulation, debts that should be paid off continue to have monthly payments.
-
-### 2.2 PMI Rate Hardcoded vs. Configurable (`simulation_engine.py:264,873`)
-
+**After:** Uses configurable rate:
 ```python
-# In HomeState class
-pmi_rate: float = 0.005
-
-# But later:
-costs['pmi'] = home.mortgage.remaining_balance * 0.005 / 12  # Hardcoded!
+costs['pmi'] = home.mortgage.remaining_balance * home.pmi_rate / 12
 ```
 
-The `pmi_rate` field exists but is ignored; the calculation uses a hardcoded 0.005.
+### 1.4 ✅ Fixed: Rent Scenario Doesn't Process RSU Sales
 
-### 2.3 Rent Scenario Doesn't Process RSU Sales (`simulation_engine.py:940-941`)
+**Before:** Rent scenario hardcoded `rsu_sale_proceeds=0`.
 
+**After:** Rent scenario now fully processes RSU sales with the same strategies (except `SELL_AT_PURCHASE` which doesn't apply to renters).
+
+### 1.5 ✅ Fixed: Rent Scenario RSU Holdings Not Updated
+
+**Before:** Vested lots weren't added to rent scenario holdings.
+
+**After:** New vested lots are properly added:
 ```python
-rsu_sale_proceeds=0,
-rsu_sale_gains=0,
-```
-
-The rent scenario never sells RSUs, which creates an apples-to-oranges comparison. In reality, someone renting might also sell RSUs for other purposes or follow the same selling strategy.
-
----
-
-## 3. Code Quality Issues
-
-### 3.1 Unused Variable `vested_lots` (`simulation_engine.py:508`)
-
-```python
-vest_income, vested_lots = self._process_rsu_vests(current_date)
-```
-
-The `vested_lots` return value is never used.
-
-### 3.2 Inconsistent Deduction Logic (`tax_calculator.py:447-448`)
-
-```python
-effective_deduction = max(standard, itemized) if not use_standard_deduction else standard
-use_std = effective_deduction == standard
-```
-
-This logic is confusing. If `use_standard_deduction=True`, it forces standard deduction. If `False`, it picks the larger. The naming is counterintuitive—setting `use_standard_deduction=False` doesn't mean "don't use standard," it means "pick the better option."
-
-### 3.3 Magic Numbers
-
-Several magic numbers throughout the code:
-- `simulation_engine.py:792`: `closing_costs = plan.loan_amount * 0.03`
-- `simulation_engine.py:647`: `growth = 1.03 ** years_beyond`
-- Various tax thresholds should have named constants
-
----
-
-## 4. Design Recommendations
-
-### 4.1 Missing Type Annotations
-
-Some methods lack return type annotations:
-- `_calculate_housing_costs` returns `dict` but should be `dict[str, float]`
-
-### 4.2 Consider Using `Decimal` for Financial Calculations
-
-Using `float` for money calculations can lead to precision issues. For a financial calculator, `decimal.Decimal` would be more appropriate.
-
-### 4.3 No Validation on Inputs
-
-`SimulationInputs` accepts any values without validation:
-- Negative salaries
-- Down payment percent > 100%
-- Mortgage rate > 100%
-
-Consider adding `__post_init__` validation.
-
-### 4.4 State Mutation Makes Testing Difficult
-
-The `FinancialSimulator` mutates internal state during `run()`, meaning you can't re-run a simulation. Consider immutable patterns or explicit reset capability.
-
----
-
-## 5. Tax Calculation Issues
-
-### 5.1 California SALT Deduction (`tax_calculator.py:474`)
-
-```python
-state_tax = self.calculate_california_income_tax(
-    total_income=total_income,
-    use_standard_deduction=True  # CA has limited itemized benefit
+new_lot = RSULot(
+    lot_id=vest.vest_id,
+    shares=vest.shares,
+    cost_basis_per_share=stock_price,
+    vest_date=vest.vest_date
 )
+rsu_holdings.append(new_lot)
 ```
 
-The comment is misleading. California does allow itemized deductions, just with different rules than federal. This should be configurable.
+### 1.6 ✅ Fixed: Unused Variable `vested_lots`
 
-### 5.2 Missing AMT Calculation
+**Before:** `_process_rsu_vests` returned tuple with unused second element.
 
-For high earners with RSUs and significant capital gains, Alternative Minimum Tax (AMT) can be significant but isn't modeled.
+**After:** Returns only `vest_income`:
+```python
+def _process_rsu_vests(self, current_date: date) -> float:
+    """Process RSU vests for this month. Returns vest income."""
+```
 
-### 5.3 Tax Year Hardcoded to 2024
+### 1.7 ✅ Fixed: No Input Validation
 
-All tax brackets and constants are for 2024. For a 10-year simulation, taxes will change. Consider adding inflation adjustments or year-specific brackets.
+**After:** Added `__post_init__` validation for `HousePurchasePlan` and `SimulationInputs`:
+```python
+def __post_init__(self):
+    if self.home_price <= 0:
+        raise ValueError("home_price must be positive")
+    if not 0 <= self.down_payment_percent <= 1:
+        raise ValueError("down_payment_percent must be between 0 and 1")
+    # ... more validation
+```
 
----
+### 1.8 ✅ Fixed: Incorrect `effective_federal_after_salt` Calculation
 
-## 6. Missing Features
+**Before:** `tax_calculator.py` had incorrect SALT-related calculation.
 
-### 6.1 No Support for:
-- 401(k) contributions and employer match
-- IRA contributions
-- Health insurance premiums
-- Child tax credits
-- Property tax Prop 13 assessments (important for California)
-- Mortgage interest deduction phase-outs at high income
-- Capital loss carryforward
+**After:** Removed the problematic field entirely.
 
-### 6.2 No Input Validation or Error Handling
+### 1.9 ✅ Fixed: No Test Suite
 
-The code assumes all inputs are valid and complete. No try/except blocks for edge cases.
-
----
-
-## 7. Documentation
-
-### 7.1 Good Practices
-- Comprehensive docstrings on classes and key methods
-- Clear module-level documentation
-- Well-organized section headers
-
-### 7.2 Areas for Improvement
-- No inline comments for complex tax calculations
-- No documentation on the algorithm for `_process_rsu_sales`
+**After:** Added comprehensive `test_financial_concepts.py` with 749 lines of educational tests.
 
 ---
 
-## 8. Testing
+## 2. New Issues Identified
 
-**No test suite exists.** For financial calculations, this is a significant gap. Recommended test coverage:
+### 2.1 Bug: RSU Vest Withholding Applied but Shares Still in Holdings
 
-1. Tax bracket edge cases
-2. RSU selling strategy behavior
-3. Mortgage amortization accuracy
-4. PMI removal timing
-5. Year-over-year consistency
+In `simulation_engine.py`, when RSUs vest:
+```python
+# RSU vest withholding (typically ~37% in CA)
+rsu_vest_withholding = vest_income * 0.37 if vest_income > 0 else 0
+self._cash -= rsu_vest_withholding
+```
+
+**Problem:** The withholding is deducted from cash, but the full number of shares remains in holdings. In reality, "sell-to-cover" would reduce the share count. This creates a mismatch where the user "pays" the tax twice—once via withholding, and again when selling RSUs that should have been reduced.
+
+**Suggested Fix:** Either:
+1. Reduce shares by ~37% at vesting (simulating sell-to-cover), OR
+2. Don't deduct withholding from cash but track it as future tax liability
+
+### 2.2 Inconsistency: Total Housing Cost Excludes Principal
+
+```python
+@property
+def total_housing_cost(self) -> float:
+    """True housing cost (excludes principal which builds equity)."""
+    return (
+        self.mortgage_interest +  # Principal excluded
+        self.property_tax + ...
+    )
+```
+
+While conceptually correct (principal builds equity), this may confuse users comparing to their actual mortgage payment. Consider:
+- Adding a separate `total_housing_payment` property that includes principal
+- Clarifying in output that this is "cost" not "payment"
+
+### 2.3 Magic Number: RSU Withholding Rate
+
+```python
+rsu_vest_withholding = vest_income * 0.37 if vest_income > 0 else 0
+```
+
+The 37% is a reasonable California estimate but should be:
+1. A named constant (e.g., `RSU_VEST_WITHHOLDING_RATE = 0.37`)
+2. Potentially configurable per state
+
+### 2.4 Closing Costs Calculation Changed but May Be Less Accurate
+
+**Before:** `closing_costs = plan.loan_amount * 0.03`
+**After:** `closing_costs = plan.home_price * 0.03`
+
+Both are approximations, but closing costs are typically a percentage of the loan amount (for lender fees) plus fixed costs. Using home price makes larger down payments appear to have higher closing costs, which isn't quite right.
+
+### 2.5 Rent Scenario YTD Income Double-Counting
+
+In `_simulate_rent_month`:
+```python
+ytd_income += gross_income
+# ...
+for vest in self.inputs.future_rsu_vests:
+    if (vest.vest_date.year == year and vest.vest_date.month == month):
+        vest_income += vest.shares * stock_price
+        ytd_income += vest_income  # Bug: This adds cumulative vest_income
+```
+
+**Problem:** If there are multiple vests in the same month, `vest_income` accumulates, and each iteration adds the cumulative amount to `ytd_income`. Should be `ytd_income += vest.shares * stock_price` instead.
 
 ---
 
-## 9. Minor Issues
+## 3. Test Suite Review (`test_financial_concepts.py`)
 
-| File | Line | Issue |
-|------|------|-------|
-| `tax_calculator.py` | 527 | `effective_federal_after_salt` calculation seems incorrect—SALT cap is $10k, not based on state rate |
-| `simulation_engine.py` | 857 | Rent scenario returns `comparable_rent` even after home purchase—should be 0 |
-| `run_simulation.py` | 251 | Prints 2026 detail but home is purchased in June 2025 |
+### 3.1 Strengths
+
+1. **Educational Value**: Excellent documentation explaining financial concepts inline
+2. **Coverage**: Tests mortgage calculations, tax brackets, capital gains, RSU mechanics, and input validation
+3. **Practical Examples**: Uses realistic numbers that help users understand the concepts
+
+### 3.2 Areas for Improvement
+
+| Issue | Location | Description |
+|-------|----------|-------------|
+| No negative test for RSU sales | `TestRSUMechanics` | Should test selling more shares than owned |
+| Missing PMI removal test | - | No test verifying PMI is removed at 80% LTV |
+| Missing breakeven test | - | No test for buy-vs-rent breakeven calculation |
+| Hardcoded dates | Throughout | Tests use 2025 dates that will become stale |
+
+### 3.3 Test Code Quality Issue
+
+```python
+def test_home_purchase_affects_net_worth(self):
+    # ...
+    assert mar.cash_balance < feb.cash_balance - 150_000, \
+        f"Cash should drop after down payment. Feb: ${feb.cash_balance:,.0f}, Mar: ${mar.cash_balance:,.0f}"
+```
+
+The assertion uses a magic number `150_000`. Should calculate expected drop based on down payment + closing costs.
 
 ---
 
-## 10. Security
+## 4. Code Quality Assessment
 
-No security concerns for this type of application. It's a local calculation tool with no network access, file writes (except CSV export), or user input handling beyond the example script.
+### 4.1 Improvements
+
+| Aspect | Before | After |
+|--------|--------|-------|
+| Input validation | None | Comprehensive `__post_init__` |
+| Debt tracking | Static | Proper amortization |
+| Rent scenario | Incomplete | Full parity with buy scenario |
+| Test coverage | None | Educational test suite |
+| PMI calculation | Hardcoded | Configurable |
+
+### 4.2 Remaining Concerns
+
+1. **Float precision**: Still using `float` for money (should consider `Decimal`)
+2. **State mutation**: Simulator still can't be re-run
+3. **Tax year hardcoding**: Still uses 2024 brackets for multi-year simulations
 
 ---
 
-## Summary Table
+## 5. Summary Table
 
-| Category | Rating | Notes |
-|----------|--------|-------|
-| Architecture | ⭐⭐⭐⭐ | Clean separation, good use of dataclasses |
-| Correctness | ⭐⭐⭐ | Several bugs in RSU/tax tracking |
-| Code Style | ⭐⭐⭐⭐ | Consistent, readable, follows Python conventions |
-| Documentation | ⭐⭐⭐⭐ | Good docstrings, clear structure |
-| Testing | ⭐ | No tests present |
-| Maintainability | ⭐⭐⭐ | Some magic numbers, state mutation concerns |
+| Category | Previous | Current | Notes |
+|----------|----------|---------|-------|
+| Architecture | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Clean design maintained |
+| Correctness | ⭐⭐⭐ | ⭐⭐⭐⭐ | Major bugs fixed |
+| Code Style | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Consistent |
+| Documentation | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Good docstrings |
+| Testing | ⭐ | ⭐⭐⭐⭐ | Comprehensive test suite added |
+| Maintainability | ⭐⭐⭐ | ⭐⭐⭐½ | Validation added, some magic numbers remain |
 
 ---
 
-## Priority Fixes
+## 6. Recommendations
 
-1. **High**: Fix RSU vesting cash flow bug
-2. **High**: Track actual short/long-term gains instead of arbitrary split
-3. **Medium**: Reduce debt balances over time
-4. **Medium**: Use configurable PMI rate
-5. **Medium**: Add input validation
-6. **Low**: Add test suite
-7. **Low**: Consider year-specific tax brackets
+### High Priority
+1. Fix RSU vest withholding / share count mismatch (Section 2.1)
+2. Fix rent scenario YTD income double-counting (Section 2.5)
+
+### Medium Priority
+3. Extract magic numbers to named constants (37% withholding, 3% closing costs)
+4. Add `total_housing_payment` property for clarity
+5. Add PMI removal and breakeven tests
+
+### Low Priority
+6. Consider `Decimal` for financial precision
+7. Add year-specific tax brackets or inflation adjustment
+8. Make test dates relative to avoid staleness
+
+---
+
+## 7. Conclusion
+
+This branch represents a significant improvement over the previous state. The critical bugs around RSU tracking, debt amortization, and rent scenario comparisons have been fixed. The addition of input validation and a comprehensive test suite substantially improves reliability and maintainability.
+
+**Recommendation:** Approve with minor fixes for the RSU withholding mismatch and YTD income double-counting issues.
