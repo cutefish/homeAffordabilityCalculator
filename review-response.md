@@ -248,6 +248,77 @@ Tests are educational and include explanations of financial concepts.
 
 ---
 
+## 10. Section 2 Follow-Up Issues (From Second Review)
+
+### 2.1 RSU Vest Withholding Mismatch ✅ FIXED
+
+**Original Issue:** RSU withholding deducted cash but shares remained full count.
+
+**Resolution:** Implemented proper sell-to-cover behavior:
+- ~37% of shares are sold at vesting to cover taxes
+- Only remaining ~63% of shares are added to holdings
+- No separate cash deduction (shares already sold to cover)
+
+**Code Change:** `simulation_engine.py:_process_rsu_vests()`
+```python
+shares_after_withholding = int(vest.shares * (1 - RSU_VEST_WITHHOLDING_RATE))
+# Only add remaining shares to holdings
+```
+
+---
+
+### 2.2 total_housing_cost vs total_housing_payment ✅ FIXED
+
+**Original Issue:** `total_housing_cost` excludes mortgage principal, which is confusing.
+
+**Resolution:** Added `total_housing_payment` property that includes principal (actual monthly payment).
+
+**Code Change:** `simulation_engine.py:MonthlySnapshot`
+```python
+@property
+def total_housing_payment(self) -> float:
+    """Total housing payment including principal (what you actually pay each month)."""
+    if self.rent > 0:
+        return self.rent
+    return (
+        self.mortgage_principal + self.mortgage_interest +
+        self.property_tax + self.homeowners_insurance +
+        self.pmi + self.hoa + self.maintenance
+    )
+```
+
+---
+
+### 2.3 Magic Numbers Extracted to Constants ✅ FIXED
+
+**Original Issue:** RSU withholding rate (0.37) was a magic number.
+
+**Resolution:** Extracted to named constants:
+```python
+RSU_VEST_WITHHOLDING_RATE = 0.37  # CA sell-to-cover rate
+CLOSING_COST_RATE = 0.03         # 3% of home price
+```
+
+---
+
+### 2.5 Rent Scenario YTD Income Double-Counting ✅ FIXED
+
+**Original Issue:** In rent scenario RSU processing, `ytd_income += vest_income` inside loop added cumulative values.
+
+**Resolution:** Fixed to add individual vest values:
+```python
+# Before (bug):
+vest_income += vest.shares * stock_price
+ytd_income += vest_income  # Added cumulative total
+
+# After (fixed):
+this_vest_value = vest.shares * stock_price
+vest_income += this_vest_value
+ytd_income += this_vest_value  # Adds just this vest
+```
+
+---
+
 ## Summary
 
 | Category | Original Rating | Current Status |
@@ -258,5 +329,6 @@ Tests are educational and include explanations of financial concepts.
 | Design (4) | ⚠️ | ✅ 1 Fixed, 3 Acknowledged |
 | Tax Issues (3) | ⚠️ | ⚠️ Acknowledged |
 | Testing | ⭐ (1/5) | ⭐⭐⭐⭐ (4/5) - 17 tests added |
+| Section 2 Follow-Up (4) | ⚠️ | ✅ All Fixed |
 
 **All critical and high-priority issues have been resolved.**

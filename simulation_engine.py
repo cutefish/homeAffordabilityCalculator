@@ -26,6 +26,19 @@ from tax_calculator import TaxCalculator
 
 
 # =============================================================================
+# CONSTANTS
+# =============================================================================
+
+# RSU vest withholding rate (sell-to-cover)
+# California: ~37% (22% federal supplemental + 10.23% CA + 1.45% Medicare + ~3% SS)
+# This percentage of shares is sold at vesting to cover taxes
+RSU_VEST_WITHHOLDING_RATE = 0.37
+
+# Default closing costs as percentage of home price
+CLOSING_COST_RATE = 0.03
+
+
+# =============================================================================
 # INPUT DATA STRUCTURES
 # =============================================================================
 
@@ -357,6 +370,17 @@ class MonthlySnapshot:
         )
 
     @property
+    def total_housing_payment(self) -> float:
+        """Total housing payment including principal (what you actually pay each month)."""
+        if self.rent > 0:
+            return self.rent
+        return (
+            self.mortgage_principal + self.mortgage_interest +
+            self.property_tax + self.homeowners_insurance +
+            self.pmi + self.hoa + self.maintenance
+        )
+
+    @property
     def total_expenses(self) -> float:
         """Total cash outflows (includes principal since it reduces cash)."""
         return (
@@ -604,15 +628,14 @@ class FinancialSimulator:
             tax_rate = self._estimate_tax_rate(income_profile.total_annual)
             income_tax = gross_income * tax_rate
 
-            # RSU vest withholding (typically ~37% in CA: 22% federal + 10.23% state + FICA)
-            rsu_vest_withholding = vest_income * 0.37 if vest_income > 0 else 0
+            # Note: RSU vest withholding is handled via sell-to-cover in _process_rsu_vests
+            # (shares are reduced, not cash deducted)
 
             # Apply all cash flows
             self._cash += gross_income + sale_proceeds
             self._cash -= sum(housing_costs.values())
             self._cash -= other_debt_payments
             self._cash -= income_tax
-            self._cash -= rsu_vest_withholding
             self._cash -= self.inputs.monthly_living_expenses
             self._cash -= sale_taxes
 
@@ -642,7 +665,7 @@ class FinancialSimulator:
                 maintenance=housing_costs.get('maintenance', 0),
                 rent=housing_costs.get('rent', 0),
                 other_debt_payments=other_debt_payments,
-                income_tax_withheld=income_tax + rsu_vest_withholding,
+                income_tax_withheld=income_tax,
                 living_expenses=self.inputs.monthly_living_expenses,
                 capital_gains_tax_paid=sale_taxes + liquidation_taxes
             )
@@ -704,7 +727,15 @@ class FinancialSimulator:
         )
 
     def _process_rsu_vests(self, current_date: date) -> float:
-        """Process RSU vests for this month. Returns vest income."""
+        """
+        Process RSU vests for this month using sell-to-cover.
+
+        In sell-to-cover, a portion of shares is automatically sold at vesting
+        to cover tax withholding. Only the remaining shares are added to holdings.
+
+        Returns:
+            vest_income: Total value of vested shares (for tax tracking)
+        """
         vest_income = 0.0
         stock_price = self.inputs.market.get_stock_price(current_date)
 
@@ -712,17 +743,22 @@ class FinancialSimulator:
         for vest in self.inputs.future_rsu_vests:
             if (vest.vest_date.year == current_date.year and
                 vest.vest_date.month == current_date.month):
-                # Create new lot
-                new_lot = RSULot(
-                    lot_id=vest.vest_id,
-                    shares=vest.shares,
-                    cost_basis_per_share=stock_price,
-                    vest_date=vest.vest_date
-                )
-                self._rsu_holdings.append(new_lot)
-
-                # Vest value is taxed as ordinary income
+                # Full vest value is taxable as ordinary income
                 vest_income += vest.shares * stock_price
+
+                # Sell-to-cover: only keep shares after withholding
+                # (Company sells ~37% of shares to cover taxes)
+                shares_after_withholding = int(vest.shares * (1 - RSU_VEST_WITHHOLDING_RATE))
+
+                # Create lot with reduced share count
+                if shares_after_withholding > 0:
+                    new_lot = RSULot(
+                        lot_id=vest.vest_id,
+                        shares=shares_after_withholding,
+                        cost_basis_per_share=stock_price,
+                        vest_date=vest.vest_date
+                    )
+                    self._rsu_holdings.append(new_lot)
 
         return vest_income
 
@@ -837,7 +873,7 @@ class FinancialSimulator:
         plan = self.inputs.house_plan
 
         # Calculate closing costs (typically 2-5% of home price)
-        closing_costs = plan.home_price * 0.03
+        closing_costs = plan.home_price * CLOSING_COST_RATE
 
         # Total cash needed
         total_upfront = plan.down_payment + closing_costs
@@ -984,20 +1020,25 @@ class FinancialSimulator:
         gross_income = monthly_salary + bonus
         ytd_income += gross_income
 
-        # Process RSU vests (same as buying scenario)
+        # Process RSU vests with sell-to-cover (same as buying scenario)
         vest_income = 0.0
         for vest in self.inputs.future_rsu_vests:
             if (vest.vest_date.year == year and vest.vest_date.month == month):
-                vest_income += vest.shares * stock_price
-                ytd_income += vest_income
-                # Add vested shares to holdings
-                new_lot = RSULot(
-                    lot_id=vest.vest_id,
-                    shares=vest.shares,
-                    cost_basis_per_share=stock_price,
-                    vest_date=vest.vest_date
-                )
-                rsu_holdings.append(new_lot)
+                this_vest_value = vest.shares * stock_price
+                vest_income += this_vest_value
+                ytd_income += this_vest_value  # Add just this vest, not cumulative
+
+                # Sell-to-cover: only keep shares after withholding
+                shares_after_withholding = int(vest.shares * (1 - RSU_VEST_WITHHOLDING_RATE))
+
+                if shares_after_withholding > 0:
+                    new_lot = RSULot(
+                        lot_id=vest.vest_id,
+                        shares=shares_after_withholding,
+                        cost_basis_per_share=stock_price,
+                        vest_date=vest.vest_date
+                    )
+                    rsu_holdings.append(new_lot)
 
         # Process RSU sales (same strategies as buying, except SELL_AT_PURCHASE)
         sale_proceeds = 0.0
@@ -1051,8 +1092,7 @@ class FinancialSimulator:
         tax_rate = self._estimate_tax_rate(income_profile.total_annual)
         income_tax = gross_income * tax_rate
 
-        # RSU vest withholding (same as buy scenario)
-        rsu_vest_withholding = vest_income * 0.37 if vest_income > 0 else 0
+        # Note: RSU vest withholding handled via sell-to-cover (reduced shares above)
 
         # Calculate and apply debt payments
         other_debt = 0.0
@@ -1072,7 +1112,7 @@ class FinancialSimulator:
 
         # Apply cash flow
         net_flow = (gross_income + sale_proceeds - rent - other_debt - income_tax -
-                    rsu_vest_withholding - sale_taxes - self.inputs.monthly_living_expenses)
+                    sale_taxes - self.inputs.monthly_living_expenses)
         cash += net_flow
 
         # Grow investments
@@ -1104,7 +1144,7 @@ class FinancialSimulator:
             maintenance=0,
             rent=rent,
             other_debt_payments=other_debt,
-            income_tax_withheld=income_tax + rsu_vest_withholding,
+            income_tax_withheld=income_tax,
             living_expenses=self.inputs.monthly_living_expenses,
             capital_gains_tax_paid=sale_taxes
         )

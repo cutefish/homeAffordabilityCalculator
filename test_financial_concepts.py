@@ -543,9 +543,11 @@ class TestSimulationIntegration:
     def test_rsu_vest_adds_income_and_holdings(self):
         """
         When RSUs vest:
-        1. Their value is recorded as income
-        2. Shares are added to holdings
-        3. Tax is withheld (~37% in CA)
+        1. Full value is recorded as income (for tax purposes)
+        2. Employer uses "sell-to-cover" - sells ~37% of shares to pay taxes
+        3. Remaining ~63% of shares are added to holdings
+
+        This is how most tech companies handle RSU vesting in California.
         """
         start = date(2025, 1, 1)
         vest_date = date(2025, 3, 15)
@@ -574,17 +576,22 @@ class TestSimulationIntegration:
         # Find March snapshot (when vest happens)
         mar = next(s for s in result.monthly_snapshots if s.month == 3 and s.year == 2025)
 
-        # Should have RSU vest income
+        # RSU vest income is the FULL value (for tax reporting)
         expected_vest_income = 100 * 150.0  # $15,000
         assert mar.rsu_vest_income == expected_vest_income, \
             f"RSU vest income should be ${expected_vest_income:,}, got ${mar.rsu_vest_income:,}"
 
-        # Should have RSU holdings value
-        assert mar.rsu_holdings_value == expected_vest_income, \
-            f"RSU holdings should equal vest value. Got ${mar.rsu_holdings_value:,}"
+        # RSU holdings reflect sell-to-cover: only ~63% of shares kept
+        # 100 shares * (1 - 0.37) = 63 shares * $150 = $9,450
+        shares_after_withholding = int(100 * (1 - 0.37))  # 63 shares
+        expected_holdings = shares_after_withholding * 150.0  # $9,450
+        assert mar.rsu_holdings_value == expected_holdings, \
+            f"RSU holdings should be ${expected_holdings:,} (after sell-to-cover). Got ${mar.rsu_holdings_value:,}"
 
-        print(f"\nRSU vesting (100 shares @ $150):")
-        print(f"  Vest income: ${mar.rsu_vest_income:,.0f}")
+        print(f"\nRSU vesting with sell-to-cover (100 shares @ $150):")
+        print(f"  Vest income (full, for taxes): ${mar.rsu_vest_income:,.0f}")
+        print(f"  Shares withheld for taxes: 37 (~37%)")
+        print(f"  Shares kept: {shares_after_withholding}")
         print(f"  RSU holdings value: ${mar.rsu_holdings_value:,.0f}")
 
 
