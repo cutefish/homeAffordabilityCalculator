@@ -1,0 +1,111 @@
+{
+  "_comment": "Home Affordability Simulation Configuration",
+  "_instructions": [
+    "Edit this file with your personal financial information.",
+    "All money values can include $ and commas (e.g., '$100,000').",
+    "Percentages can be decimals (0.0675) or with % sign (6.75%).",
+    "Dates should be in YYYY-MM-DD format.",
+    "For RSU holdings, you can specify a CSV file path instead of inline data."
+  ],
+
+  "filing_status": "MARRIED_FILING_JOINTLY",
+  "state": "CA",
+  "start_date": "2025-01-01",
+  "initial_cash": 80000,
+  "comparable_rent": 4000,
+  "monthly_living_expenses": 4000,
+  "simulation_years": 10,
+  "stock_symbol": "ACME",
+
+  "income_schedule": [
+    {"year": 2025, "base_salary": 200000, "bonus": 20000},
+    {"year": 2026, "base_salary": 210000, "bonus": 25000},
+    {"year": 2027, "base_salary": 220000, "bonus": 30000},
+    {"year": 2028, "base_salary": 230000, "bonus": 30000},
+    {"year": 2029, "base_salary": 240000, "bonus": 35000},
+    {"year": 2030, "base_salary": 250000, "bonus": 40000}
+  ],
+
+  "rsu_holdings": {"file": "rsu_holdings.csv"},
+
+  "future_rsu_vests": [
+    {"vest_id": "VEST-2025-Q1", "shares": 100, "vest_date": "2025-03-15"},
+    {"vest_id": "VEST-2025-Q3", "shares": 100, "vest_date": "2025-09-15"},
+    {"vest_id": "VEST-2026-Q1", "shares": 100, "vest_date": "2026-03-15"},
+    {"vest_id": "VEST-2026-Q3", "shares": 100, "vest_date": "2026-09-15"},
+    {"vest_id": "VEST-2027-Q1", "shares": 75, "vest_date": "2027-03-15"},
+    {"vest_id": "VEST-2027-Q3", "shares": 75, "vest_date": "2027-09-15"}
+  ],
+
+  "rsu_sell_rules": [
+    {"lot_id": "all", "strategy": "SELL_IMMEDIATELY", "_comment": "Options: SELL_IMMEDIATELY, SELL_AT_PURCHASE, SELL_LONG_TERM, HOLD, CUSTOM"}
+  ],
+
+  "investments": [
+    {
+      "name": "High-Yield Savings",
+      "account_type": "MONEY_MARKET",
+      "balance": 50000,
+      "cost_basis": 50000,
+      "annual_return": "4.5%",
+      "is_liquid": true
+    },
+    {
+      "name": "Brokerage - ETFs",
+      "account_type": "ETFS",
+      "balance": 80000,
+      "cost_basis": 60000,
+      "annual_return": "8%",
+      "is_liquid": true
+    },
+    {
+      "name": "Bond Fund",
+      "account_type": "BONDS",
+      "balance": 30000,
+      "cost_basis": 28000,
+      "annual_return": "4%",
+      "is_liquid": true
+    }
+  ],
+
+  "debts": [
+    {
+      "name": "Car Loan",
+      "monthly_payment": 450,
+      "remaining_balance": 12000,
+      "interest_rate": "5%"
+    },
+    {
+      "name": "Student Loan",
+      "monthly_payment": 300,
+      "remaining_balance": 20000,
+      "interest_rate": "4.5%"
+    }
+  ],
+
+  "house_plan": {
+    "purchase_date": "2025-06-01",
+    "home_price": 1000000,
+    "down_payment_percent": "20%",
+    "mortgage_rate": "6.75%",
+    "loan_term_years": 30,
+    "property_tax_rate": "1.25%",
+    "hoa_monthly": 400,
+    "homeowners_insurance_annual": 2000,
+    "maintenance_rate": "1%"
+  },
+
+  "market": {
+    "current_stock_price": 170,
+    "stock_prices": {
+      "2025-01-01": 170,
+      "2025-06-01": 175,
+      "2026-01-01": 180,
+      "2027-01-01": 190
+    },
+    "stock_annual_growth": "8%",
+    "home_appreciation_rate": "3%",
+    "rent_increase_rate": "4%",
+    "investment_return_rate": "7%"
+  }
+}

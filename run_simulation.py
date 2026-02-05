@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """
-Home Affordability Simulation - Example Usage
+Home Affordability Simulation
 
-This script demonstrates how to use the unified financial simulation engine
-to analyze home purchase decisions with multi-year projections.
+This script runs financial simulations for home purchase decisions.
+
+Usage:
+    python run_simulation.py                    # Run with built-in sample data
+    python run_simulation.py config.json        # Run with JSON configuration file
+    python run_simulation.py --template         # Generate template config file
+    python run_simulation.py --help             # Show help
 
 The simulation takes into account:
 - Multi-year income projections
-- RSU holdings and future vesting schedule
+- RSU holdings and future vesting schedule (supports brokerage CSV exports)
 - RSU selling strategies
 - Investment accounts
 - House purchase timing and terms
@@ -17,7 +22,12 @@ The simulation takes into account:
 - Breakeven analysis vs renting
 """
 
+import argparse
+import json
+import sys
 from datetime import date
+from pathlib import Path
+
 from simulation_engine import (
     # Input structures
     SimulationInputs,
@@ -38,6 +48,7 @@ from simulation_engine import (
     export_to_csv,
 )
 from config import FilingStatus, InvestmentType
+from config_loader import load_config, create_template_config
 
 
 def create_sample_inputs() -> SimulationInputs:
@@ -337,21 +348,162 @@ def analyze_rsu_strategy():
         )
 
 
-if __name__ == "__main__":
-    # Run main simulation
-    result = run_simulation()
+def run_from_config(config_path: str, output_csv: str = None):
+    """Run simulation from a JSON configuration file."""
+    print("=" * 80)
+    print("HOME AFFORDABILITY SIMULATION")
+    print("=" * 80)
+    print(f"\nLoading configuration from: {config_path}")
 
-    # Compare scenarios
-    run_scenario_comparison()
+    try:
+        inputs = load_config(config_path)
+    except Exception as e:
+        print(f"\nError loading configuration: {e}")
+        sys.exit(1)
 
-    # Analyze RSU strategies
-    analyze_rsu_strategy()
+    print("\nInitial Financial State:")
+    print(f"  Cash: ${inputs.initial_cash:,.0f}")
+    if inputs.investments:
+        print(f"  Investments: ${sum(inv.balance for inv in inputs.investments):,.0f}")
+    if inputs.rsu_holdings:
+        print(f"  RSU Holdings: {sum(lot.shares for lot in inputs.rsu_holdings)} shares")
+    if inputs.future_rsu_vests:
+        print(f"  Future RSU Vests: {sum(v.shares for v in inputs.future_rsu_vests)} shares")
 
-    # Export to CSV for further analysis
-    export_to_csv(result, "simulation_results.csv")
+    # Create and run simulator
+    print("\nRunning simulation...")
+    simulator = FinancialSimulator(inputs)
+    result = simulator.run()
+
+    # Print results
+    print_simulation_summary(result)
+
+    # Export to CSV
+    if output_csv is None:
+        output_csv = Path(config_path).stem + "_results.csv"
+    export_to_csv(result, output_csv)
 
     print("\n" + "=" * 80)
     print("SIMULATION COMPLETE")
     print("=" * 80)
-    print("\nTo customize, modify the values in create_sample_inputs()")
-    print("CSV exported to: simulation_results.csv")
+    print(f"\nCSV exported to: {output_csv}")
+
+    return result
+
+
+def generate_template(output_path: str = None):
+    """Generate a template configuration file."""
+    template = create_template_config()
+
+    if output_path:
+        with open(output_path, 'w') as f:
+            json.dump(template, indent=2, fp=f)
+        print(f"Template configuration saved to: {output_path}")
+        print("\nEdit this file with your personal financial information.")
+        print("See config_template.json for an example with inline RSU data.")
+    else:
+        print(json.dumps(template, indent=2))
+
+
+def main():
+    """Main entry point with argument parsing."""
+    parser = argparse.ArgumentParser(
+        description="Home Affordability Simulation Tool",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python run_simulation.py                          Run with built-in sample data
+  python run_simulation.py my_config.json           Run with JSON config file
+  python run_simulation.py --template               Print template config to stdout
+  python run_simulation.py --template -o config.json  Save template to file
+  python run_simulation.py config.json -o out.csv   Specify output CSV file
+
+Configuration File:
+  The JSON config file supports:
+  - All simulation parameters (income, investments, house plan, etc.)
+  - RSU holdings can be inline OR loaded from a brokerage CSV export
+  - Flexible date formats (YYYY-MM-DD, Mon-DD-YYYY, MM/DD/YYYY)
+  - Money values with $ and commas ($100,000)
+  - Percentages as decimals (0.0675) or with % (6.75%)
+
+RSU CSV Format (Fidelity-compatible):
+  Acquired, Quantity, Average cost basis, Grant Date
+  Sep-29-2025, 78, $308.66, Sep-20-2022
+        """
+    )
+
+    parser.add_argument(
+        'config',
+        nargs='?',
+        help='Path to JSON configuration file'
+    )
+
+    parser.add_argument(
+        '--template',
+        action='store_true',
+        help='Generate a template configuration file'
+    )
+
+    parser.add_argument(
+        '-o', '--output',
+        help='Output file path (CSV for simulation, JSON for template)'
+    )
+
+    parser.add_argument(
+        '--sample',
+        action='store_true',
+        help='Run with built-in sample data (default if no config provided)'
+    )
+
+    parser.add_argument(
+        '--compare',
+        action='store_true',
+        help='Run scenario comparison (only with sample data)'
+    )
+
+    parser.add_argument(
+        '--analyze-rsu',
+        action='store_true',
+        help='Analyze RSU selling strategies (only with sample data)'
+    )
+
+    args = parser.parse_args()
+
+    # Handle template generation
+    if args.template:
+        generate_template(args.output)
+        return
+
+    # Handle config file
+    if args.config:
+        run_from_config(args.config, args.output)
+        return
+
+    # Default: run sample simulation
+    print("No configuration file specified. Running with built-in sample data.")
+    print("Use --help to see options, or --template to generate a config file.\n")
+
+    result = run_simulation()
+
+    if args.compare:
+        run_scenario_comparison()
+
+    if args.analyze_rsu:
+        analyze_rsu_strategy()
+
+    # Export to CSV
+    output_csv = args.output or "simulation_results.csv"
+    export_to_csv(result, output_csv)
+
+    print("\n" + "=" * 80)
+    print("SIMULATION COMPLETE")
+    print("=" * 80)
+    print(f"\nTo use your own data, create a config file:")
+    print("  python run_simulation.py --template -o my_config.json")
+    print("  # Edit my_config.json with your data")
+    print("  python run_simulation.py my_config.json")
+    print(f"\nCSV exported to: {output_csv}")
+
+
+if __name__ == "__main__":
+    main()

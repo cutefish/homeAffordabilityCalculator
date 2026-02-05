@@ -1,0 +1,74 @@
+{
+  "_comment": "Example configuration with INLINE RSU holdings (no CSV file needed)",
+
+  "filing_status": "SINGLE",
+  "state": "CA",
+  "start_date": "2025-01-01",
+  "initial_cash": 50000,
+  "comparable_rent": 3500,
+  "monthly_living_expenses": 3500,
+  "simulation_years": 5,
+  "stock_symbol": "TECH",
+
+  "income_schedule": [
+    {"year": 2025, "base_salary": 180000, "bonus": 15000},
+    {"year": 2026, "base_salary": 190000, "bonus": 18000},
+    {"year": 2027, "base_salary": 200000, "bonus": 20000}
+  ],
+
+  "rsu_holdings": [
+    {
+      "lot_id": "VEST-2023-Q1",
+      "shares": 50,
+      "cost_basis_per_share": 120.00,
+      "vest_date": "2023-03-15"
+    },
+    {
+      "lot_id": "VEST-2024-Q2",
+      "shares": 75,
+      "cost_basis_per_share": 135.00,
+      "vest_date": "2024-06-15"
+    }
+  ],
+
+  "future_rsu_vests": [
+    {"vest_id": "VEST-2025-Q1", "shares": 50, "vest_date": "2025-03-15"},
+    {"vest_id": "VEST-2025-Q3", "shares": 50, "vest_date": "2025-09-15"}
+  ],
+
+  "rsu_sell_rules": [
+    {"lot_id": "all", "strategy": "SELL_LONG_TERM"}
+  ],
+
+  "investments": [
+    {
+      "name": "Emergency Fund",
+      "account_type": "MONEY_MARKET",
+      "balance": 30000,
+      "cost_basis": 30000,
+      "annual_return": "4.5%",
+      "is_liquid": true
+    }
+  ],
+
+  "debts": [],
+
+  "house_plan": {
+    "purchase_date": "2025-09-01",
+    "home_price": 750000,
+    "down_payment_percent": "15%",
+    "mortgage_rate": "6.5%",
+    "loan_term_years": 30,
+    "property_tax_rate": "1.1%",
+    "hoa_monthly": 300,
+    "homeowners_insurance_annual": 1800,
+    "maintenance_rate": "1%"
+  },
+
+  "market": {
+    "current_stock_price": 150,
+    "stock_annual_growth": "7%",
+    "home_appreciation_rate": "3%",
+    "rent_increase_rate": "4%"
+  }
+}
